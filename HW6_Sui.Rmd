@@ -1,0 +1,95 @@
+---
+title: "Support Vector Machines(SVMs) Tutorial"
+author: "Sonali Narang"
+date: "11/12/2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Support Vector Machines(SVMs)
+
+A Support Vector Machine (SVM) is a discriminative classifier formally defined by a separating hyperplane. Given labeled training data, the algorithm outputs an optimal hyperplane which categorizes new examples.
+
+```{r load relevant libraries, include=FALSE}
+library(tidyverse)
+library(mlbench)
+library(caret)
+library(pROC)
+library(randomForest)
+
+```
+
+##Homework
+
+1. Choose an appropriate machine learning dataset and use SVM with two different kernels. Campare the results. 
+```{r}
+# This dataset contains 167 variables including three cognitive test scores and mean diffusion kurtosis values (a diffusion MRI measure) from 165 regions across the whole brain (including grey and white matter, subcortical structures, and cerebellum). The outcome variable is the diagnostic group of the participants in the study, which are either  healthy controls or patients with psychosis.
+mk_all=read_csv("/Users/a/Dropbox/MachineLearning/final_project/mk_data_r_allregions.csv")
+
+set.seed(132)
+mk_all = mk_all[-c(2:3)] #remove unrelated measures
+mk_all = mk_all[ ,colSums(is.na(mk_all)) == 0] #remove columns with NA
+mk_all$psychosisgroup = as.factor(mk_all$psychosisgroup)
+
+train_size = floor(0.7 * nrow(mk_all))
+train_pos = sample(seq_len(nrow(mk_all)), size = train_size)
+
+train_mk = mk_all[train_pos, -(1:2)]
+test_mk = mk_all[-train_pos, -(1:2)]
+
+#train
+control = trainControl(method = "repeatedcv", repeats = 3, classProbs = T, savePredictions = T)
+
+#radial kernel
+svm_radial = train(psychosisgroup ~ .,  data = train_mk, method = "svmRadial", tuneLength = 10, trControl = control)
+roc(predictor = svm_radial$pred$S, response = svm_radial$pred$obs)$auc
+
+#polynomial kernel
+svm_poly = train(psychosisgroup ~ .,  data = train_mk, method = "svmPoly", tuneLength = 10, trControl = control)
+roc(predictor = svm_poly$pred$S, response = svm_poly$pred$obs)$auc
+
+par(mfrow=c(1,2))
+plot(x = roc(predictor = svm_radial$pred$S, response = svm_radial$pred$obs)$specificities, y = roc(predictor = svm_radial$pred$S, response = svm_radial$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "SVM radial kernel training ROC")
+plot(x = roc(predictor = svm_poly$pred$S, response = svm_poly$pred$obs)$specificities, y = roc(predictor = svm_poly$pred$S, response = svm_poly$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "SVM polynomial kernel training ROC")
+
+#test
+svm_test_radial = predict(svm_radial, newdata = test_mk)
+confusionMatrix(svm_test_radial, reference = as.factor(test_mk$psychosisgroup))
+
+svm_test_poly = predict(svm_poly, newdata = test_mk)
+confusionMatrix(svm_test_poly, reference = as.factor(test_mk$psychosisgroup))
+#Seeing from the training ROC curves and the testing results, the two svm kernels chosen here didn't make much differences (both horribly bad). This is most likely due to the intrinsic problems of the dataset: not only there are way more variables than the number of observations, but also there is great level of multicollinearity among variables. These problems were somewhat addressed in the next session with a simple feature selection method. 
+#Although at this point there is no distinguishing which kernel yields better outcome, I'm going to use radial kernel for the next portion, since the polynomial kernel in this case took a lot longer than radial kernel.
+
+```
+
+2. Attempt using SVM after using a previously covered feature selection method. Do the results improve? Explain. 
+```{r}
+#feature selection
+feature_select = randomForest(psychosisgroup~., data=train_mk, importance = TRUE, oob.times = 30, confusion = TRUE)
+tmp = importance(feature_select) 
+#I chose 10 variables out of the whole datasets, mainly basing on their 'mean decreased accuracy' measure. Also I made sure the variables (regions) I chose were not too closely located in the brain to avoid extremely correlated variables (for instance, right hemisphere parsorbitalis and parstrangularis white matter are both important features according to the feature selection method, but they are right next to each other in the frontal lobe, which means the diffusion values should be very correlated in these two).
+
+#train
+control = trainControl(method = "repeatedcv", repeats = 3, classProbs = T, savePredictions = T)
+
+svm_radial_new = train(psychosisgroup ~ PC1_general_IQ + wm_lh_transversetemporal + CC_Anterior + wm_lh_insula + ctx_lh_isthmuscingulate + wm_lh_parsopercularis + wm_lh_precentral + wm_rh_entorhinal + Right_Cerebellum_Cortex + ctx_lh_lateraloccipital,  data = train_mk, method = "svmRadial", tuneLength = 10, trControl = control)
+
+#wm_rh_insula + Right_Cerebellum_Cortex + Left_Cerebellum_White_matter + wm_lh_parsorbitalis + wm_rh_inferiortemporal + wm_rh_isthmuscingulate + ctx_lh_lateraloccipital + wm_lh_postcentral
+
+roc(predictor = svm_radial_new$pred$S, response = svm_radial_new$pred$obs)$auc
+
+plot(x = roc(predictor = svm_radial_new$pred$S, response = svm_radial_new$pred$obs)$specificities, y = roc(predictor = svm_radial_new$pred$S, response = svm_radial_new$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
+
+#test
+svm_test = predict(svm_radial_new, newdata = test_mk)
+confusionMatrix(svm_test, reference = as.factor(test_mk$psychosisgroup))
+
+#The testing accuracy increased dramatically after applying feature selection. As mentioned, the original dataset has too many variables and many of them are highly correlated. These problems lead to unstability in any statistical model and thus will cause inaccurate predictions. With feature selection process - choosing important and less related features - the dataset is now able to produce a relative stable model and is therefore much more insusceptible to the variations that are brought by the testing set. 
+
+```
